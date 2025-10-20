@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Mouse Gradient</title>
+<style>
+  :root{--mouse-x:50vw;--mouse-y:50vh;--mouse-xp:.5;--mouse-yp:.5;}
+  html,body{height:100%;margin:0;}
+  .hero{
+    height:100%;
+    display:grid;place-items:center;
+    background: radial-gradient(circle at var(--mouse-x) var(--mouse-y), #ff7a00, #0b57d0);
+    color:#fff;font:600 24px/1.2 system-ui, sans-serif;
+    transform: translate(calc((var(--mouse-xp) - .5)*10px), calc((var(--mouse-yp) - .5)*10px));
+  }
+</style>
+</head>
+<body>
+  <main class="hero">Follow the mouse.</main>
+<script>
+  const root = document.documentElement;
+  let rAF = false;
+  window.addEventListener("mousemove", e => {
+    if (rAF) return; rAF = true;
+    requestAnimationFrame(() => {
+      const w = innerWidth, h = innerHeight;
+      root.style.setProperty("--mouse-x", e.clientX + "px");
+      root.style.setProperty("--mouse-y", e.clientY + "px");
+      root.style.setProperty("--mouse-xp", (e.clientX / w).toString());
+      root.style.setProperty("--mouse-yp", (e.clientY / h).toString());
+      rAF = false;
+    });
+  }, {passive:true});
+</script>
+</body>
+</html>
