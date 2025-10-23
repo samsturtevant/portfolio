@@ -5,33 +5,383 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Mouse Gradient</title>
 <style>
-  :root{--mouse-x:50vw;--mouse-y:50vh;--mouse-xp:.5;--mouse-yp:.5;}
-  html,body{height:100%;margin:0;}
-  .hero{
-    height:100%;
-    display:grid;place-items:center;
-    background: radial-gradient(circle at var(--mouse-x) var(--mouse-y), #ff7a00, #0b57d0);
-    color:#fff;font:600 24px/1.2 system-ui, sans-serif;
-    transform: translate(calc((var(--mouse-xp) - .5)*10px), calc((var(--mouse-yp) - .5)*10px));
+  :root {
+    --mouse-x: 50vw;
+    --mouse-y: 50vh;
+    --mouse-xp: .5;
+    --mouse-yp: .5;
+  }
+
+  html { background-color: #0b0b0b; }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;   /* 👈 hides scrollbars */
+  }
+  body { perspective: 25vh; }
+  .hero { transform-style: preserve-3d; will-change: transform; }
+
+  .hero {
+    height: 100%;
+    display: grid;
+    place-items: center;
+    color: #dcdcdc;
+    font: 600 24px/1.2 system-ui, sans-serif;
+  }
+
+  #wrapper { position: fixed; inset: 0; width: 100vw; height: 100vh; scale: 1.1;
+    transform-style: preserve-3d; will-change: transform;
+  }
+  #wrapper canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;
+    backface-visibility: hidden;
   }
 </style>
 </head>
 <body>
-  <main class="hero">Follow the mouse.</main>
+  <div id="wrapper">
+    <canvas id="drops"></canvas>
+</div>
+    <main class="hero">
+    </main>
+
 <script>
   const root = document.documentElement;
-  let rAF = false;
-  window.addEventListener("mousemove", e => {
-    if (rAF) return; rAF = true;
-    requestAnimationFrame(() => {
-      const w = innerWidth, h = innerHeight;
-      root.style.setProperty("--mouse-x", e.clientX + "px");
-      root.style.setProperty("--mouse-y", e.clientY + "px");
-      root.style.setProperty("--mouse-xp", (e.clientX / w).toString());
-      root.style.setProperty("--mouse-yp", (e.clientY / h).toString());
-      rAF = false;
+  let rAF=false, mx=innerWidth/2, my=innerHeight/2;
+
+  addEventListener("mousemove", e=>{
+    if (rAF) return; rAF=true;
+    requestAnimationFrame(()=>{
+      const w=innerWidth,h=innerHeight;
+      mx=e.clientX; my=e.clientY;
+      root.style.setProperty("--mouse-x", mx+"px");
+      root.style.setProperty("--mouse-y", my+"px");
+      root.style.setProperty("--mouse-xp",(mx/w).toString());
+      root.style.setProperty("--mouse-yp",(my/h).toString());
+      rAF=false;
     });
   }, {passive:true});
+
+  const hero = document.querySelector(".hero");
+  const wrapper = document.getElementById("wrapper");
+  let cx = 0, cy = 0;
+
+  (function animate(){
+    const tx = (mx/innerWidth) - 0.5;
+    const ty = (my/innerHeight) - 0.5;
+    cx += (tx - cx) * 0.04;
+    cy += (ty - cy) * 0.04;
+
+    const rotX = -cy * 4;
+    const rotY = cx * 4;
+    hero.style.transform =
+      `translate3d(${Math.round(cx*8)}px, ${Math.round(cy*8)}px, 0) rotateX(${rotX}deg) rotateY(${rotY}deg)`;
+
+    // subtle 3D on canvases (no scale, integer-snapped translate)
+    const wrapRotX = rotX * 0.6;
+    const wrapRotY = rotY * 0.6;
+    wrapper.style.transform =
+      `translate3d(${Math.round(cx*6)}px, ${Math.round(cy*6)}px, 0) rotateX(${wrapRotX}deg) rotateY(${wrapRotY}deg)`;
+
+    requestAnimationFrame(animate);
+  })();
+
+  // Droplet renderer (dual canvas: background + foreground)
+  const fgCanvas = document.getElementById("drops");
+  const ctx = fgCanvas.getContext("2d"); // foreground keeps existing variable name
+  ctx.imageSmoothingEnabled = false;
+  const DPR_BASE = devicePixelRatio;
+  let   RES_MULT = 2;                 // ↑ increase for crisper pixels (2–3 is sane)
+  const DPR = DPR_BASE * RES_MULT;    // backing store scale
+let drops=[], W=0, H=0, t=0, frame=0;
+let prevMx = mx, prevMy = my, mSpeed = 0; // smoothed mouse speed (CSS px/frame)
+let twGain = 1; // smoothed twinkle intensity multiplier
+
+  // Fixed seed so both layers align identically
+let SEED = Math.random() * 123456;
+function mulberry32(a){return function(){let t=a+=0x6D2B79F5;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return ((t^t>>>14)>>>0)/4294967296}}
+  // Global control: larger value => larger grid (less dense dithering)
+  let GRID_SCALE = 2.0; // spacing multiplier; stripes stay 1px via 'sub'
+  // Color-cycle sensitivity (higher = cycles more times for same mouse move)
+  let COLOR_MULT = 18; // higher = more phase wraps per mouse move
+
+  function resize(){
+    W = fgCanvas.width  = innerWidth  * DPR;
+    H = fgCanvas.height = innerHeight * DPR;
+    fgCanvas.style.width  = innerWidth + "px";
+    fgCanvas.style.height = innerHeight + "px";
+
+    // regenerate droplets proportional to area (seeded)
+    const count = Math.round(innerWidth * innerHeight) / 2000;
+    const rand = mulberry32(SEED ^ (W|0) ^ ((H|0)<<1));
+    // --- Per-tile round-robin color balancing ---
+    const tileCss = Math.max(90, Math.min(innerWidth, innerHeight) / 12); // ~local region size in CSS px
+    const tile = tileCss * DPR;
+    const tileCounts = new Map(); // key: "qx,qy" → count
+    drops = Array.from({length:count}, (_, i) => {
+      const base = 0.20 + Math.pow(rand(), 2.2) * 0.7;           // slightly bigger minimum
+      const extra = rand() < 0.02 ? (0.8 + rand()*0.8) : 0;      // rarer, smaller boost
+      let r = (base + extra) * DPR;                               // backing px
+
+      // Occasionally promote to a larger droplet (visible multi‑pixel)
+      if (rand() < 0.07) {                                       // ~7% of drops
+        const minBig = 0, maxBig = 0;                           // CSS px radius
+        r = Math.max(r, (minBig + rand() * (maxBig - minBig)) * DPR);
+      }
+
+      // Clamp range
+      r = Math.min(r, 12 * DPR);                                 // cap (≈12 CSS px)
+      r = Math.max(r, 1  * DPR);                                  // MIN = 1 CSS px
+      const c1 = 0.18 + rand()*0.36;
+      const c2 = Math.min(0.95, c1 + 0.18 + rand()*0.32);
+      // Sample position
+      const x = rand()*W;
+      const y = rand()*H;
+      // Per-tile round-robin: guarantees local 1/3 split, but rotate start color per tile using hashed qx,qy so local regions don't all start at red
+      const qx = Math.floor(x / tile), qy = Math.floor(y / tile);
+      const key = qx + "," + qy;
+      const used = tileCounts.get(key) || 0;
+      // Rotate start color per tile using hashed qx,qy so local regions don't all start at red
+      const offset = ((qx*7) ^ (qy*11) ^ SEED) % 3;
+      const kind = (used + offset) % 3; // 0=R,1=G,2=B balanced and rotated
+      tileCounts.set(key, used + 1);
+
+      const mono = true; // keep mono blobs
+      const monoAlpha = 0.70 + rand()*0.25;
+      const monoColor = kind === 0 ? [255,0,0] : (kind === 1 ? [0,255,0] : [0,0,255]);
+      const p = rand();
+      // per-drop phase bias and mix with global input
+      const phase = rand();                // 0..1 static bias per drop
+      const mix = 0.10 + rand()*0.30;      // weight for global vs local bias (10–40% global, more independent)
+
+      // per‑drop response axis (unit vector)
+      const ax = rand()*2-1, ay = rand()*2-1;
+      const al = Math.hypot(ax, ay) || 1;
+      const dirx = ax/al, diry = ay/al;
+
+      return {
+        x,
+        y,
+        r,
+        s: rand()*0.8 + 0.2,
+        n: rand()*6.283,
+        wob: 0.10 + rand()*0.35,
+        c1,
+        c2,
+        aR: 1,
+        aG: 1,
+        aB: 1,
+        mono: true,
+        // store a grayscale channel (0-255) and an alpha
+        gray: Math.round(60 + rand()*120),
+        mA: monoAlpha,
+        u: rand(), uT: rand(),
+        pixelate: true,
+        cell: 1.4 + rand()*1.2,
+        layout: rand() < 0.5 ? "RGB" : "BGR",
+        pal: (rand()*3)|0,
+        dirx,
+        diry,
+        phase,
+        mix,
+        kind,
+        // twinkle state
+        tw: rand()*0.2,
+        twT: rand(),
+        twSpeed: 0.005 + rand()*0.02,
+        // per-star independent twinkle phase & frequency
+        twOmega: 2*Math.PI*(0.25 + rand()*1.0),   // radians/sec target frequency
+        twOmegaT: 2*Math.PI*(0.25 + rand()*1.0),  // slow-drifting target
+        twJit: 0.0005 + rand()*0.002,             // easing rate toward target
+        twP: rand()*6.283,                         // independent phase offset
+      // brightness weight: many dim, few bright
+      mag: Math.pow(rand(), 3.0), // more skewed toward dim, fewer bright
+      };
+    });
+
+  }
+  addEventListener("resize", resize);
+  resize();
+
+  function draw() {
+    t += 0.016;
+    // Update smoothed mouse speed
+    const dmx = mx - prevMx, dmy = my - prevMy;
+    const inst = Math.hypot(dmx, dmy);
+    mSpeed = mSpeed * 0.9 + inst * 0.1; // EMA
+    prevMx = mx; prevMy = my;
+
+    // Global motion → twinkle intensity mapping (rest = low, moving = high)
+    const speedAmtGlobal = Math.min(1, mSpeed / (20 * DPR)); // more gradual
+    const targetTw = 0.70 + 2.30 * speedAmtGlobal; // 0.70x at rest → 3.0x at full speed
+    twGain += (targetTw - twGain) * 0.06; // ease for natural ramp
+
+    // Device-pixel mouse coords (used throughout)
+    const mpx = mx * DPR, mpy = my * DPR;
+
+    ctx.clearRect(0, 0, W, H);
+
+    for (const d of drops) {
+      // --- Twinkle update ---
+      d.tw += (d.twT - d.tw) * (d.twSpeed * 0.5);   // ease toward a moving target (slower)
+      if (Math.abs(d.tw - d.twT) < 0.02 && Math.random() < 0.25) {
+        d.twT = Math.random();                      // pick a new target occasionally
+        d.twSpeed = 0.005 + Math.random()*0.02;     // and a new easing speed
+      }
+      // independent per-star frequency drift
+      d.twOmega += (d.twOmegaT - d.twOmega) * (d.twJit * 0.5);
+      if (Math.random() < 0.005) {
+        d.twOmegaT = 2*Math.PI*(0.25 + Math.random()*1.0);
+      }
+      const basePulse = (Math.max(0, Math.sin(d.twP + t * d.twOmega)) ** 2) * d.tw * (0.7 + 1.5*d.mag);
+      // speed-driven sparkle boost and micro-glints (desynced per star)
+      const speedAmt = Math.min(1, mSpeed / (12 * DPR));
+      const micro = Math.max(0, Math.sin(d.twP * 1.7 + t * (1.2 + 2.5 * d.u))) * (0.30 + 0.70 * speedAmt);
+      // motion-responsive twinkle intensity (low at rest, high when moving)
+      const sPulse = basePulse * twGain + micro * (0.5 + 0.8 * speedAmtGlobal);
+
+      // Blobbed RGB refraction inside a circular mask (or square for tiniest drops)
+      ctx.save();
+      const isSquare = d.r <= 1.5 * DPR; // smallest become squares
+      ctx.beginPath();
+      ctx.rect(d.x - d.r, d.y - d.r, d.r * 2, d.r * 2);
+      ctx.clip();
+
+      if (d.mono) {
+        // Nonlinear mouse warp + motion boost for exaggerated global phase
+        const nx = mx/innerWidth, ny = my/innerHeight;
+        const wx = Math.sign(nx - 0.5) * Math.pow(Math.abs(nx - 0.5), 0.75) + 0.5;
+        const wy = Math.sign(ny - 0.5) * Math.pow(Math.abs(ny - 0.5), 0.75) + 0.5;
+        const speedAmtG = Math.min(1, mSpeed / (10 * DPR));
+        const globalPhase = (((((wx + wy) * 0.5) * COLOR_MULT + speedAmtG * 0.35) % 1) + 1) % 1;
+
+        // Local phase: project mouse position relative to the drop along its private axis
+        const dx = mpx - d.x, dy = mpy - d.y;
+        const proj = (dx * d.dirx + dy * d.diry) / (80 * DPR); // stronger local response
+        const localPhase = (((d.phase + proj) % 1) + 1) % 1;
+
+        // Mix: smaller mix => more local/independent; initialized per-drop
+        const phaseBlend = d.mix * globalPhase + (1 - d.mix) * localPhase;
+        const phaseBlendFast = (((phaseBlend + 0.18 * speedAmtG) % 1) + 1) % 1;
+
+        // Mouse-speed jitter: more motion => more desync, each star has its own offset
+        const speedAmt = Math.min(1, mSpeed / (10 * DPR));
+        const jitter = Math.sin(t * (0.6 + d.u * 2.2) + d.u * 12.7) * (0.20 + 0.70 * speedAmt);
+
+        // Target gray with jitter, clamped to [0,1]
+        const phaseJ = Math.max(0, Math.min(1, phaseBlendFast + jitter));
+        // Wider dynamic range when moving; darker overall at rest
+        const minG = 70 - 30 * speedAmtGlobal;   // 70 at rest -> 40 at speed
+        const maxG = 160 + 80 * speedAmtGlobal;  // 160 at rest -> 240 at speed
+        const targetGray = Math.round(minG + phaseJ * (maxG - minG));
+
+        // Distance-aware gain (reduced so nearby motion doesn't hard-couple neighbors)
+        const dist = Math.hypot(dx, dy);
+        const baseGain = 0.06;      // gentler smoothing
+        const nearBoost = 0.18;     // less coupling
+        const scale = 120 * DPR;
+        const gain = baseGain + nearBoost * (1 - Math.tanh(dist / scale));
+
+        // Ease toward target gray
+        d.gray += (targetGray - d.gray) * Math.min(1, gain * 0.5);
+        const G = Math.round(d.gray);
+        const A = Math.min(1, d.mA * 0.6 + 0.25);
+        // per-drop base brightness & alpha, skewed by brightness weight and size
+        const sizeBoost = Math.min(1.45, Math.max(0.65, (1.8 * DPR) / (d.r + 0.5)));
+        const baseRestScale = 0.60 + 0.40 * speedAmtGlobal; // fade at rest, full at speed
+        const baseGrayAdj = Math.round(G * (0.75 + 0.60 * d.mag) * sizeBoost * baseRestScale);
+        const baseAlphaAdj = Math.min(1, A * (0.80 + 0.70 * d.mag) * baseRestScale);
+        // apply twinkle to grayscale & alpha (stronger when moving)
+        const brightGain = 1.0 + 1.2 * speedAmtGlobal;
+        const GG = Math.min(255, baseGrayAdj + Math.round((8 + 18 * d.mag) * sizeBoost * sPulse * brightGain));
+        const AA = Math.min(1, baseAlphaAdj + (0.08 + 0.18 * d.mag) * sPulse * brightGain);
+
+        // Draw a filled circle/square depending on size
+        ctx.globalCompositeOperation = "source-over";
+        if (d.r <= 1.5 * DPR) {
+          ctx.fillStyle = `rgba(${GG},${GG},${GG},${AA})`;
+          ctx.fillRect(d.x - d.r, d.y - d.r, d.r * 2, d.r * 2);
+        } else {
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(d.x, d.y, d.r, 0, Math.PI*2);
+          ctx.clip();
+
+          // subtle rotated pixelation that still respects grayscale
+          const subdivisions = 4;
+          const cell = (d.r * 2) / subdivisions;
+          const theta = Math.atan2(mpy - d.y, mpx - d.x);
+          ctx.translate(d.x, d.y);
+          ctx.rotate(theta);
+
+          for (let i = 0; i < subdivisions; i++) {
+            for (let j = 0; j < subdivisions; j++) {
+              const sx = -d.r + i * cell + cell / 2;
+              const sy = -d.r + j * cell + cell / 2;
+
+              // small per-cell variance so the blob isn't flat
+              const cellPhase = (((sx + sy) * 0.0007 + d.phase) % 1 + 1) % 1;
+              const cellGray = Math.round(GG + (cellPhase - 0.5) * 18);
+              const cellAlpha = Math.max(0.12, AA - Math.abs(cellPhase - 0.5) * 0.35);
+
+              ctx.fillStyle = `rgba(${cellGray},${cellGray},${cellGray},${cellAlpha})`;
+              ctx.fillRect(sx - cell/2, sy - cell/2, cell, cell);
+            }
+          }
+
+          ctx.restore();
+        }
+
+        // Soft radial highlight for glassiness
+        const rg = ctx.createRadialGradient(d.x, d.y, 0, d.x, d.y, d.r);
+        rg.addColorStop(0.0, `rgba(255,255,255,0.06)`);
+        rg.addColorStop(1.0, `rgba(255,255,255,0.00)`);
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = rg;
+        ctx.fillRect(d.x - d.r, d.y - d.r, d.r*2, d.r*2);
+        ctx.globalCompositeOperation = "source-over";
+        ctx.restore();
+        continue;
+      }
+
+      // Smooth grayscale fallback for non-mono drops
+      const uN = (((((mx/innerWidth) + (my/innerHeight)) * 0.5 * COLOR_MULT) % 1) + 1) % 1;
+      const minG2 = 70 - 30 * speedAmtGlobal;
+      const maxG2 = 160 + 80 * speedAmtGlobal;
+      const targetG = Math.round(minG2 + uN * (maxG2 - minG2));
+      // ease toward target
+      d.gray = (d.gray || 120) + (targetG - (d.gray || 120)) * 0.04;
+      const sizeBoost2 = Math.min(1.45, Math.max(0.65, (1.8 * DPR) / (d.r + 0.5)));
+      const baseRestScale2 = 0.60 + 0.40 * speedAmtGlobal;
+      const baseG2 = Math.round(d.gray * (0.75 + 0.55 * d.mag) * sizeBoost2 * baseRestScale2);
+      const brightGain2 = 1.0 + 1.2 * speedAmtGlobal;
+      const GG2 = Math.min(255, baseG2 + Math.round((6 + 14 * d.mag) * sizeBoost2 * sPulse * brightGain2));
+      const AA2 = Math.min(1, (0.22 + 0.25 * d.mag) * baseRestScale2 + (0.08 + 0.14 * d.mag) * sPulse * brightGain2);
+      ctx.fillStyle = `rgba(${GG2},${GG2},${GG2},${AA2})`;
+      ctx.beginPath();
+      ctx.rect(d.x - d.r, d.y - d.r, d.r * 2, d.r * 2);
+      ctx.fill();
+      ctx.restore();
+      continue;
+    }
+
+    // // --- DEBUG: mouse tracker dot ---
+    // (function(){
+    //   ctx.save();
+    //   ctx.globalCompositeOperation = "source-over";
+    //   ctx.beginPath();
+    //   ctx.arc(mpx, mpy, 3 * DPR, 0, Math.PI*2);
+    //   ctx.fillStyle = "rgba(255,255,255,0.95)";
+    //   ctx.fill();
+    //   ctx.lineWidth = 1 * DPR;
+    //   ctx.strokeStyle = "rgba(0,0,0,0.85)";
+    //   ctx.stroke();
+    //   ctx.restore();
+    // })();
+    frame++;
+    requestAnimationFrame(draw);
+  }
+  draw();
 </script>
 </body>
 </html>
