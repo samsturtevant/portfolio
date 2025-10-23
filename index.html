@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Mouse Gradient</title>
+<title>portfolio</title>
 <style>
   :root {
     --mouse-x: 50vw;
@@ -214,8 +214,8 @@ function mulberry32(a){return function(){let t=a+=0x6D2B79F5;t=Math.imul(t^t>>>1
     prevMx = mx; prevMy = my;
 
     // Global motion → twinkle intensity mapping (rest = low, moving = high)
-    const speedAmtGlobal = Math.min(1, mSpeed / (20 * DPR)); // more gradual
-    const targetTw = 0.70 + 2.30 * speedAmtGlobal; // 0.70x at rest → 3.0x at full speed
+    const speedAmtGlobal = Math.min(1, mSpeed / (40 * DPR)); // requires more velocity for full effect
+    const targetTw = 0.70 + 3.50 * speedAmtGlobal; // 0.70x at rest → 4.2x at full speed
     twGain += (targetTw - twGain) * 0.06; // ease for natural ramp
 
     // Device-pixel mouse coords (used throughout)
@@ -273,8 +273,8 @@ function mulberry32(a){return function(){let t=a+=0x6D2B79F5;t=Math.imul(t^t>>>1
         // Target gray with jitter, clamped to [0,1]
         const phaseJ = Math.max(0, Math.min(1, phaseBlendFast + jitter));
         // Wider dynamic range when moving; darker overall at rest
-        const minG = 70 - 30 * speedAmtGlobal;   // 70 at rest -> 40 at speed
-        const maxG = 160 + 80 * speedAmtGlobal;  // 160 at rest -> 240 at speed
+        const minG = 70 - 40 * speedAmtGlobal;   // 70 at rest -> 30 at speed
+        const maxG = 160 + 120 * speedAmtGlobal; // 160 at rest -> 280 at speed
         const targetGray = Math.round(minG + phaseJ * (maxG - minG));
 
         // Distance-aware gain (reduced so nearby motion doesn't hard-couple neighbors)
@@ -352,8 +352,8 @@ function mulberry32(a){return function(){let t=a+=0x6D2B79F5;t=Math.imul(t^t>>>1
 
       // Smooth grayscale fallback for non-mono drops
       const uN = (((((mx/innerWidth) + (my/innerHeight)) * 0.5 * COLOR_MULT) % 1) + 1) % 1;
-      const minG2 = 70 - 30 * speedAmtGlobal;
-      const maxG2 = 160 + 80 * speedAmtGlobal;
+      const minG2 = 70 - 40 * speedAmtGlobal;
+      const maxG2 = 160 + 120 * speedAmtGlobal;
       const targetG = Math.round(minG2 + uN * (maxG2 - minG2));
       // ease toward target
       d.gray = (d.gray || 120) + (targetG - (d.gray || 120)) * 0.04;
